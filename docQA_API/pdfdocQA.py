@@ -44,37 +44,38 @@ app = FastAPI()
 
 
 @app.post("/upload")
-async def upload(files: List[UploadFile] = File(...)):
-    for file in files:
-        try:
-            contents = await file.read()
-            async with aiofiles.open(file.filename, 'wb') as f:
-                await f.write(contents)
-        except Exception:
-            return {"message": "There was an error uploading the file(s)"}
-        finally:
-            await file.close()
+async def upload(file: UploadFile = File(...)):
+    try:
+        contents = await file.read()
+        async with aiofiles.open(file.filename, 'wb') as f:
+            await f.write(contents)
+    except Exception:
+        return {"message": "There was an error uploading the file"}
+    finally:
+        await file.close()
 
-    loader = PagedPDFSplitter(input_pdf_file)
+    loader = PagedPDFSplitter(file.filename)
 
     pages = loader.load_and_split()
+    print("pages loaded")
     assert len(pages) > 0, "No pages found in PDF!"
     faiss_index = FAISS.from_documents(pages, OpenAIEmbeddings())
+    print("faiss index created")
     app.state.qa = VectorDBQA.from_chain_type(llm=OpenAI(), chain_type="stuff", vectorstore=faiss_index)
 
-    return {"message": f"Successfuly uploaded {[file.filename for file in files]}"}  
-
+    return {"message": f"Successfuly uploaded and embedded {file.filename}"}
 
 
 @app.post("/query/")
 async def run_query(request: Request):
+    print("starting...")
     query_request = QueryRequest.parse_raw(await request.body())
     username = query_request.query.username
     password = query_request.query.password
     if password == 'abc123':
         print('User %s authenticated' % username)
-        result = app.state.qa.query_pdf_with_sources(qa, query_request.query.querytext)
-        return JSONResponse(content=jsonable_encoder(response))
+        result = app.state.qa.run(query_request.query.querytext)
+        return JSONResponse(content=jsonable_encoder(result))
     else:
         print('User not authenticated')
         raise HTTPException(status_code=401, detail="User not authenticated")
